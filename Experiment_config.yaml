@@ -1,0 +1,8 @@
+dataset: exchange
+features: multi
+seq_len: 96
+horizon: 1
+cut: null
+runs: 2
+n_epochs: 5
+val_interval: 1
