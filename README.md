@@ -24,7 +24,7 @@ Overall experiment parameters are specified in Experiment_config.yaml.
 dataset: choose exchange, weather, solar, electricity, or traffic
 features: whether to load as a single variate or multi variate time series; choose multi or single
 seq_len: size of the window used for training
-horizon: number of steps ahead to predict. Note: this project currently only supports seq2one forecasting
+horizon: number of steps ahead to predict. Note: this project only supports seq2one forecasting
 cut: percentage of dataset to use. Leave as null to use full dataset
 runs: number of models to train 
 n_epochs: number of epochs each model is trained
