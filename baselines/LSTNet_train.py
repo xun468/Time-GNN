@@ -11,21 +11,26 @@ from utils.utils import *
 from utils.data_utils import get_dataloaders, get_dataset_dims
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-from models.TimeGNN import TimeGNN
+from models.LSTNet import LSTNet
 
 #load experiment configs
 with open('Experiment_config.yaml', 'r') as f:
     config = list(yaml.load_all(f))[0]
     
-def train(model):
+def train(model, model_type = ""):
     model.train()
     batch_losses = [] 
 
-    for batch in train_loader:
-        x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)       
+    for batch in train_loader:      
+        x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+        if config["features"] == "single":
+            x_batch = x_batch.unsqueeze(-1)
+            y_batch = y_batch.unsqueeze(1)
       
-        y_hat = model(x_batch)      
-      
+        # Make predictions
+        y_hat = model(x_batch)        
+       
+        # Computes loss
         loss = model.loss(y_hat, y_batch)
         
         # Computes gradients
@@ -39,15 +44,20 @@ def train(model):
     
     return batch_losses 
 
-def val(model):
+def val(model, model_type = ""):
     model.eval()
     batch_val_losses = []    
 
     for batch in val_loader:
-        x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+        x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+        if config["features"] == "single":
+            x_batch = x_batch.unsqueeze(-1)
+            y_batch = y_batch.unsqueeze(1)
+        
 
         y_hat = model(x_batch)
 
+        # Computes loss
         loss = model.loss(y_hat, y_batch)
         
         batch_val_losses.append(loss.item())
@@ -59,29 +69,27 @@ def test(test_loader, load_state = True, model_loc = "", return_graphs = False):
         model.load_state_dict(torch.load(model_loc))
       
     with torch.no_grad():
-        model.eval()        
+        model.eval()
+        
         predictions = []
         values = []
         
         for batch in test_loader:
-            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+            x_batch, y_batch = batch[0].to(device), batch[1].to(device)
+            if config["features"] == "single":
+                x_batch = x_batch.unsqueeze(-1)
+                y_batch = y_batch.unsqueeze(1)
 
-
-            if return_graphs: 
-                y_hat, graph = model(x_batch, return_graphs)
-                edge_list = dense_to_sparse(graph)[0]
-                print(edge_list)
-            else:
-                y_hat = model(x_batch)
+            y_hat = model(x_batch)
             
             y_hat = y_hat.cpu().detach().numpy()
             predictions.append(y_hat)
-            values.append(y_batch.cpu().detach().numpy())            
+            values.append(y_batch.cpu().detach().numpy())
 
     return predictions, values
 
 #Recording args
-model_type = "TimeGNN"
+model_type = "LSTNet"
 output_dir = config["output_dir"]
 experiment_number = None #Leave as None to autogenerate a new folder. Change to write into a specific folder
 save_dir, model_dir = create_directories(model_type, output_dir, experiment_number)
@@ -97,23 +105,25 @@ train_loader, val_loader, test_loader, test_loader_one, scaler = get_dataloaders
 
 #Model Args 
 args = {
-    "input_dim" : input_dim, 
-    "output_dim" : output_dim,
-    "seq_len" : config["seq_len"],  
-    
-    "hidden_dim" : 32,    
-    "batch_size" : 16,    
-    
-    #Edge Learning Args
-    "keep_self_loops" : False,
-    "enforce_consecutive" : False,
-    
-    #GNN Args
-    "block_size" : 3, 
-    "aggregate" : "last",
+    "hidCNN" : 50,
+    "hidRNN" : 50,
+    "CNN_kernel" : 5,
 
+    "clip" : 10,
+    "dropout" : 0.2,
+
+    "hidSkip" : 5,
+    "normalize" : 2,
+    "output_fun" : "None",
+
+    "seq_len" : config["seq_len"],
+    "input_dim" : input_dim,
+    "highway_window" : 24,
+    "skip" : 24,
+    "horizon" : 1,
 }
-loss = masked_mae
+
+loss = torch.nn.MSELoss()
  
 #Training args
 train_losses = [] 
@@ -142,11 +152,11 @@ for i in range(0, config["runs"]):
     gc.collect()
     torch.cuda.empty_cache()
 
-    model = TimeGNN(loss, **args).to(device)
-    optimizer = optim.Adam(model.parameters(), weight_decay = 1e-5)
+    model = LSTNet(loss, args).double().to(device)
+    optimizer = optim.Adam(model.parameters())
     
     train_time = []    
-    for epoch in range(config["n_epochs"]):
+    for epoch in range(n_epochs):
         t0 = time.time()
         batch_losses = train(model)
         t1 = time.time()
@@ -165,6 +175,7 @@ for i in range(0, config["runs"]):
                 torch.save(model.state_dict(), model_dir + "best_run" + str(i) + ".pt")   
         else:
             print(f"[{epoch}/{n_epochs}] Training loss: {train_losses[-1]:.4f} \t Time: {t1-t0:.2f}")
+
 
     torch.save(model.state_dict(), model_dir + "last_run" + str(i) + ".pt")
 

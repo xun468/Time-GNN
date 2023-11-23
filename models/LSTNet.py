@@ -13,7 +13,7 @@ class LSTNet(nn.Module):
         self.Ck = args["CNN_kernel"];
         self.skip = args["skip"];
         self.pt = int((self.P - self.Ck)/self.skip)
-        print((self.P - self.Ck)/self.skip)
+
         self.hw = args["highway_window"]
         self.conv1 = nn.Conv2d(1, self.hidC, kernel_size = (self.Ck, self.m));
         self.GRU1 = nn.GRU(self.hidC, self.hidR);

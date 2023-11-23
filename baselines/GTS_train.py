@@ -5,8 +5,10 @@ import os
 import time
 import yaml
 import pickle
-from utils import *
-from data_utils import get_dataloaders, get_dataset_dims
+import gc
+from contextlib import redirect_stdout
+from utils.utils import *
+from utils.data_utils import get_dataloaders, get_dataset_dims
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
 from models.GTS.model import GTSModel
@@ -108,25 +110,16 @@ def test(model, test_loader, model_loc = "", load_state = True):
             y_hat, mid_output = model(label, x_batch, train_feas, args['temp'], args['gumbel_soft'])
             predictions.append(y_hat.cpu().detach().numpy())
             values.append(y_batch.cpu().detach().numpy())
-            
-    print(predictions[0].shape)
-    print(values[0].shape)
 
     return predictions, values
 
 #Recording args
 model_type = "GTS"
-experiment_number = get_experiment_number()
-save_dir = "OutputDump/experiment_" + str(experiment_number) + "/"
-model_dir = save_dir + model_type + "_models/"
-
+output_dir = config["output_dir"]
+experiment_number = None #Leave as None to autogenerate a new folder. Change to write into a specific folder
+save_dir, model_dir = create_directories(model_type, output_dir, experiment_number)
 print(save_dir)
 
-if not os.path.exists(save_dir):
-    os.makedirs(save_dir)
-if not os.path.exists(model_dir):
-    os.makedirs(model_dir)    
-    
 #Dataset args    
 input_dim, output_dim = get_dataset_dims(config["dataset"],config["features"])
 
@@ -134,6 +127,7 @@ input_dim, output_dim = get_dataset_dims(config["dataset"],config["features"])
 train_loader, val_loader, test_loader, test_loader_one, scaler = get_dataloaders(config["dataset"], seq_len = config["seq_len"], 
                                                                                  horizon = config["horizon"], features = config["features"], 
                                                                                  cut = config["cut"])
+
 #Model args
 args = {
   "cl_decay_steps": 2000,
@@ -159,15 +153,10 @@ def gts_loss(y_true, y_predicted):
 
 loss = gts_loss  
 
-#Train args 
-runs = 2
-n_epochs = 5
-val_interval = 1 
-
+#Training args
 train_losses = [] 
 val_losses = []
 val_epoch = [] 
-
 metrics_last = {}
 metrics_best = {}
 results_last = []
@@ -195,8 +184,12 @@ n_epochs = config["n_epochs"]
 for i in range(0, config["runs"]):
     print("Run " + str(i))
     best_val = float('inf')
+    
+    model = None
+    gc.collect()
+    torch.cuda.empty_cache()
+    
     batches_seen = 0
-
     model = GTSModel(0.5, **args).to(device)
     optimizer = optim.Adam(model.parameters(), weight_decay = 1e-5)
     lr_scheduler = torch.optim.lr_scheduler.MultiStepLR(optimizer, milestones=[20, 30, 40], gamma=float(0.1))
@@ -210,7 +203,6 @@ for i in range(0, config["runs"]):
 
         train_losses.append(np.mean(batch_losses))
         train_time.append(t1-t0)
-        train_losses.append(np.mean(batch_losses))
 
         if epoch % config["val_interval"] == 0:
             val_losses.append(val(model))
@@ -220,24 +212,25 @@ for i in range(0, config["runs"]):
           )
             if val_losses[-1] <= best_val and not np.isnan(val_losses[-1]):
                 best_val = val_losses[-1]
-                torch.save(model.state_dict(), model_dir + "best_run" + str(i) + ".pt")    
+                torch.save(model.state_dict(), model_dir + "best_run" + str(i) + ".pt")  
+        else:
+            print(f"[{epoch}/{n_epochs}] Training loss: {train_losses[-1]:.4f} \t Time: {t1-t0:.2f}")
 
     torch.save(model.state_dict(), model_dir + "last_run" + str(i) + ".pt")
 
-    print("Last")
+    print("Last model this run: ")
     t0 = time.time()
-    predictions, values = test(model, test_loader_one, load_state = False)
+    predictions, values = test(test_loader_one, load_state = False)
     t1 = time.time()
     inf_time = t1-t0
     metrics_last, df_results_last = metrics(predictions, values, metrics_best, scaler, test_loader_one.dataset.start, config["features"], train_time, inf_time)
     results_last.append(df_results_last)  
 
     print("")
-    print("Best")
+    print("Best model this run: ")
     t0 = time.time()
-    predictions, values = test(model, test_loader_one, load_state = True, model_loc = model_dir + "best_run" + str(i) + ".pt")
-    t1 = time.time()
-    
+    predictions, values = test(test_loader_one, load_state = True, model_loc = model_dir + "best_run" + str(i) + ".pt")
+    t1 = time.time()    
     inf_time = t1-t0
     metrics_best, df_results_best = metrics(predictions, values, metrics_best, scaler, test_loader_one.dataset.start, config["features"], train_time, inf_time)
 
@@ -246,16 +239,25 @@ for i in range(0, config["runs"]):
 
 print("DONE")
 print(model_type)
+print(config["dataset"])
 print("horizon " + str(config["horizon"]))
 
-print("Best:")
+print("\nBest Models Aggregate:")
 print_metrics(metrics_best)
-print("Last:")
+print("\nLast Models Aggregate:")
 print_metrics(metrics_last)
 
-if config["features"] == "single":
-    print_graphs(results_best, title = model_type)    
-    
+with open(save_dir + 'out.txt', 'w') as f:
+    with redirect_stdout(f):
+        print(model_type)
+        print(config["dataset"])
+        print("horizon " + str(config["horizon"]))
+
+        print("\nBest Models Aggregate:")
+        print_metrics(metrics_best)
+        print("\nLast Models Aggregate:")
+        print_metrics(metrics_last)
+        
 with open(save_dir + model_type + "_best.pickle", 'wb') as handle:
     pickle.dump(results_best, handle)
 

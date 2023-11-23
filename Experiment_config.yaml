@@ -4,5 +4,6 @@ seq_len: 96
 horizon: 1
 cut: null
 runs: 2
-n_epochs: 5
+n_epochs: 2
 val_interval: 1
+output_dir: outputs/

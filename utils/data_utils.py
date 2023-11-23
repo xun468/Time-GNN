@@ -3,12 +3,20 @@ from torch.utils.data import Dataset, DataLoader
 import pandas as pd 
 
 dataset_loc = {
-    "min-temps" : "datasets/daily-min-temperatures.csv",
     "electricity" : "datasets/ECL.csv",
     "solar" : "datasets/solar_AL.txt",
     "traffic" : "datasets/traffic.txt", 
     "exchange" : "datasets/exchange_rate.txt", 
     "weather" : "datasets/WTH.csv",
+}
+
+#number of variables in the time series 
+dataset_dims = {
+    "electricity" : 321,
+    "weather" : 12,
+    "exchange" : 8,
+    "traffic" : 862,
+    "solar" : 137
 }
 
 class StandardScaler():
@@ -28,14 +36,16 @@ class StandardScaler():
     def inverse_transform(self, data):      
         mean = torch.from_numpy(self.mean).type_as(data).to(data.device) if torch.is_tensor(data) else self.mean
         std = torch.from_numpy(self.std).type_as(data).to(data.device) if torch.is_tensor(data) else self.std
-
-#         print(data.shape)
-#         print(mean.shape)
-#         print(std.shape)
-        # if data.shape[-1] != mean.shape[-1]:
-        #     mean = mean[-1:]
-        #     std = std[-1:]
         return (data * std) + mean
+
+def get_dataset_dims(dataset, mode):
+    if mode == "single":
+        return 1, 1
+    elif mode == "multi":
+        return dataset_dims[dataset], dataset_dims[dataset]
+    else: 
+        print("Invalid feature mode " + mode)
+        assert False
 
 def read_data(dataset, features, seq_len, target = "", scale = True, cut = None):
     df = pd.read_csv(dataset_loc[dataset])
@@ -128,17 +138,3 @@ def get_dataloaders(dataset, batch_size = 16, seq_len = 20, horizon = 1, feature
 
     return train_loader, val_loader, test_loader, test_loader_one, scaler
 
-dataset_dims = {
-    "electricity" : 321,
-    "weather" : 12,
-    "exchange" : 8
-}
-
-def get_dataset_dims(dataset, mode):
-    if mode == "single":
-        return 1, 1
-    elif mode == "multi":
-        return dataset_dims[dataset], dataset_dims[dataset]
-    else: 
-        print("Invalid feature mode " + mode)
-        assert False

@@ -1,16 +1,17 @@
 import torch
 import torch.optim as optim
-import torch.nn as nn
 import numpy as np
 import os
 import time
+import gc
 import yaml
 import pickle
-from utils import *
-from data_utils import get_dataloaders, get_dataset_dims
+from contextlib import redirect_stdout
+from utils.utils import *
+from utils.data_utils import get_dataloaders, get_dataset_dims
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 
-from models.TCN import TCN
+from torch_geometric_temporal import MTGNN 
 
 #load experiment configs
 with open('Experiment_config.yaml', 'r') as f:
@@ -21,19 +22,24 @@ def train(model, model_type = ""):
     batch_losses = [] 
 
     for batch in train_loader:
-        x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
         if config["features"] == "single":
-            x_batch = x_batch.unsqueeze(1)
+            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+            x_batch = x_batch.unsqueeze(1).unsqueeze(1)           
         else:
+            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
             x_batch = x_batch.permute(0,2,1)
-            y_batch = y_batch.squeeze(1)
+            x_batch = x_batch.unsqueeze(1)
+            y_batch = y_batch.unsqueeze(-1)
       
         # Make predictions
-        y_hat = model(x_batch)        
+        y_hat = model(x_batch)     
+        
+        if config["features"] == "single":
+            y_hat = y_hat.squeeze(1).squeeze(1)        
        
         # Computes loss
-        loss = model.loss(y_hat, y_batch)
-        
+        loss = masked_mae(y_hat, y_batch)
+
         # Computes gradients
         loss.backward()
 
@@ -50,26 +56,31 @@ def val(model, model_type = ""):
     batch_val_losses = []    
 
     for batch in val_loader:
-        x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
         if config["features"] == "single":
-            x_batch = x_batch.unsqueeze(1)
+            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+            x_batch = x_batch.unsqueeze(1).unsqueeze(1)            
         else:
-            x_batch = x_batch.permute(0,2,1) 
-            y_batch = y_batch.squeeze(1)
+            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+            x_batch = x_batch.permute(0,2,1)
+            x_batch = x_batch.unsqueeze(1)
+            y_batch = y_batch.unsqueeze(-1)            
       
         y_hat = model(x_batch)
+        
+        if config["features"] == "single":
+            y_hat = y_hat.squeeze(1).squeeze(1)
 
         # Computes loss
-        loss = model.loss(y_hat, y_batch)
+        loss = masked_mae(y_hat, y_batch)     
         
         batch_val_losses.append(loss.item())
         
     return np.mean(batch_val_losses)
 
-def test(test_loader, load_state = True, model_loc = "", return_graphs = False):
+def test(test_loader, load_state = True, model_loc = ""):
     if load_state:
         model.load_state_dict(torch.load(model_loc))
-    
+      
     with torch.no_grad():
         model.eval()
         
@@ -77,36 +88,33 @@ def test(test_loader, load_state = True, model_loc = "", return_graphs = False):
         values = []
         
         for batch in test_loader:
-            x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
             if config["features"] == "single":
-                x_batch = x_batch.unsqueeze(1)
+                x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
+                x_batch = x_batch.unsqueeze(1).unsqueeze(1)
             else:
+                x_batch, y_batch = batch[0].float().to(device), batch[1].float().to(device)
                 x_batch = x_batch.permute(0,2,1)
-                y_batch = y_batch.squeeze(1)            
-         
+                x_batch = x_batch.unsqueeze(1)
+                y_batch = y_batch.unsqueeze(-1)
+          
             y_hat = model(x_batch)
+
+            if config["features"] == "single": 
+                y_hat = y_hat.squeeze(1).squeeze(1)
             
             y_hat = y_hat.cpu().detach().numpy()
             predictions.append(y_hat)
             values.append(y_batch.cpu().detach().numpy())
-            
-    print(predictions[0].shape)
-    print(values[0].shape)
 
     return predictions, values
 
 #Recording args
-model_type = "TCN"
-experiment_number = get_experiment_number()
-save_dir = "OutputDump/experiment_" + str(experiment_number) + "/"
-model_dir = save_dir + model_type + "_models/"
+model_type = "MTGNN"
+output_dir = config["output_dir"]
+experiment_number = None #Leave as None to autogenerate a new folder. Change to write into a specific folder
+save_dir, model_dir = create_directories(model_type, output_dir, experiment_number)
 print(save_dir)
 
-if not os.path.exists(save_dir):
-    os.makedirs(save_dir)
-if not os.path.exists(model_dir):
-    os.makedirs(model_dir)    
-    
 #Dataset args    
 input_dim, output_dim = get_dataset_dims(config["dataset"],config["features"])
 
@@ -114,24 +122,43 @@ input_dim, output_dim = get_dataset_dims(config["dataset"],config["features"])
 train_loader, val_loader, test_loader, test_loader_one, scaler = get_dataloaders(config["dataset"], seq_len = config["seq_len"], 
                                                                                  horizon = config["horizon"], features = config["features"], 
                                                                                  cut = config["cut"])
-
 #Model Args 
 args = {
-    "input_size" : input_dim, 
-    "output_size": output_dim, 
-    "num_channels": [128,128,128],
-}
+    "gcn_true" : True,
+    "build_adj" : True,
+    "gcn_depth" : 2,    
+    
+    "kernel_set" : [2,3,6,7],
+    "kernel_size" : 7,
+    "dropout" : 0.3,
+    "node_dim" : 40, 
+    "dilation_exponential" : 2, 
+    "conv_channels" : 16,
+    "residual_channels" : 16,
+    "skip_channels" : 32,
+    "end_channels" : 64, 
 
-loss = nn.MSELoss()
- 
-#Training args
+    "seq_length" : config["seq_len"], 
+    "in_dim" : 1,
+    "out_dim" : 1,
+    "num_nodes" : input_dim, 
+    "subgraph_size" : 4, #default 20
+
+    "layers" : 5,
+    "propalpha" : 0.05, 
+    "tanhalpha" : 3,
+    "layer_norm_affline" : False
+}
+loss = masked_mae
+  
 train_losses = [] 
 val_losses = []
 val_epoch = [] 
+
 metrics_last = {}
 metrics_best = {}
 results_last = []
-results_best = [] 
+results_best = []
 
 #Save args
 with open(save_dir + model_type + "_args.yaml", 'w') as f:
@@ -147,11 +174,11 @@ for i in range(0, config["runs"]):
     print("Run " + str(i))
     best_val = float('inf')
 
-    model = TCN(loss = loss, **args).to(device)
-    optimizer = optim.Adam(model.parameters())
+    model = MTGNN(**args).to(device)
+    optimizer = optim.Adam(model.parameters(), weight_decay = 1e-5)
     
     train_time = []    
-    for epoch in range(n_epochs):
+    for epoch in range(config["n_epochs"]):
         t0 = time.time()
         batch_losses = train(model)
         t1 = time.time()
@@ -165,14 +192,15 @@ for i in range(0, config["runs"]):
             print(
               f"[{epoch}/{n_epochs}] Training loss: {train_losses[-1]:.4f}\t Validation loss: {val_losses[-1]:.4f} \t Time: {t1-t0:.2f}"
           )
-
             if val_losses[-1] <= best_val and not np.isnan(val_losses[-1]):
                 best_val = val_losses[-1]
-                torch.save(model.state_dict(), model_dir + "best_run" + str(i) + ".pt")    
+                torch.save(model.state_dict(), model_dir + "best_run" + str(i) + ".pt")   
+        else:
+            print(f"[{epoch}/{n_epochs}] Training loss: {train_losses[-1]:.4f} \t Time: {t1-t0:.2f}")
 
     torch.save(model.state_dict(), model_dir + "last_run" + str(i) + ".pt")
 
-    print("Last")
+    print("Last model this run: ")
     t0 = time.time()
     predictions, values = test(test_loader_one, load_state = False)
     t1 = time.time()
@@ -181,11 +209,10 @@ for i in range(0, config["runs"]):
     results_last.append(df_results_last)  
 
     print("")
-    print("Best")
+    print("Best model this run: ")
     t0 = time.time()
     predictions, values = test(test_loader_one, load_state = True, model_loc = model_dir + "best_run" + str(i) + ".pt")
-    t1 = time.time()
-    
+    t1 = time.time()    
     inf_time = t1-t0
     metrics_best, df_results_best = metrics(predictions, values, metrics_best, scaler, test_loader_one.dataset.start, config["features"], train_time, inf_time)
 
@@ -194,16 +221,25 @@ for i in range(0, config["runs"]):
 
 print("DONE")
 print(model_type)
+print(config["dataset"])
 print("horizon " + str(config["horizon"]))
 
-print("Best:")
+print("\nBest Models Aggregate:")
 print_metrics(metrics_best)
-print("Last:")
+print("\nLast Models Aggregate:")
 print_metrics(metrics_last)
 
-if config["features"] == "single":
-    print_graphs(results_best, title = model_type)    
-    
+with open(save_dir + 'out.txt', 'w') as f:
+    with redirect_stdout(f):
+        print(model_type)
+        print(config["dataset"])
+        print("horizon " + str(config["horizon"]))
+
+        print("\nBest Models Aggregate:")
+        print_metrics(metrics_best)
+        print("\nLast Models Aggregate:")
+        print_metrics(metrics_last)
+        
 with open(save_dir + model_type + "_best.pickle", 'wb') as handle:
     pickle.dump(results_best, handle)
 
