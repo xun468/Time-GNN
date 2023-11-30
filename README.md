@@ -1,5 +1,5 @@
 # Time-GNN 
-Pytorch implementation of TimeGNN: Temporal Dynamic Graph Learning for Time Series Forecasting. Full paper available <URL to arxiv>here 
+Pytorch implementation of TimeGNN: Temporal Dynamic Graph Learning for Time Series Forecasting. Full paper available [here](https://arxiv.org/abs/2307.14680).
 
 <figure> 
 
@@ -38,5 +38,12 @@ Models can be evaluated by simply running their respective training scripts (Tim
 New datasets can be added by modifying utils/data_utils.py. Insert the file path and number of variables of the new dataset in dataset_loc and dataset_dims respectively. The read_data function assumes the dataset can be loaded into a dataframe where each column corresponds to a relevant variable and row to the timestep. The new dataset can then be chosen by modifying Experiment_config.yaml. 
 
 ## Citation 
-<bibtex citation> 
+```
+@inproceedings{xu2023,
+  title={TimeGNN: Temporal Dynamic Graph Learning for Time Series Forecasting},
+  author={Xu, Nancy and Kosma, Chrysoula and Vazirgiannis, Michalis},
+  booktitle={Complex Networks},
+  year={2023}
+}
+```
 
